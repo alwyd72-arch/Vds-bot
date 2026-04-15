@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import telebot
 from telebot import types
 import sqlite3
@@ -12,8 +13,7 @@ app = Flask('')
 def home():
     return "Bot Aktif!"
 
-def run_web():
-     Railway'in verdiği portu kullanır, yoksa 8080'i seçer
+def run_web():    
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
