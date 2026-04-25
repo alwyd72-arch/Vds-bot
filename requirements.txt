@@ -6,7 +6,7 @@ cfonts
 requests
 aiohttp
 beautifulsoup4
-lxmlo
+lxml
 Pillow
 numpy
 pandas
