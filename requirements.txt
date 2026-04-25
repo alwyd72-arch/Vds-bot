@@ -86,7 +86,6 @@ frozenlist
 multidict
 yarl
 aiodns
-cchardet
 python-multipart
 itsdangerous
 blinker
