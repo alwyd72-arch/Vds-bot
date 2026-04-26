@@ -19,3 +19,4 @@ tqdm
 schedule
 psutil
 openai
+google-generativeai
