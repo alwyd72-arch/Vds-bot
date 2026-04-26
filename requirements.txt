@@ -20,3 +20,4 @@ schedule
 psutil
 openai
 google-generativeai
+groq
