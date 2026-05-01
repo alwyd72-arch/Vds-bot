@@ -21,3 +21,6 @@ psutil
 openai
 google-generativeai
 groq
+python-telegram-bot[job-queue]==20.7
+apscheduler>=3.10.0
+tzlocal>=5.0
