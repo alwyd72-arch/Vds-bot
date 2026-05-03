@@ -13,8 +13,8 @@ from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-TOKEN = ""
-ADMIN_IDS = [8113976572, 8434939976]
+TOKEN = "8113976572:AAHsDdfSVtyBaU_txJ9T6cbFXdQKIvOEiLQ"
+ADMIN_IDS = [8434939976]
 PREMIUM_STARS = 25  # Kaç yıldız = premium
 
 def is_admin(uid):
