@@ -494,12 +494,31 @@ def upload(message):
     # 🔒 GÜVENLİK TARAMASI
     warnings = scan_file(filename)
 
+    # Admin yüklüyorsa direkt onaylı kaydet, değilse pending
+    initial_status = 'approved' if is_admin(uid) else 'pending'
+
     with db_lock:
         sql.execute("INSERT INTO bots (user_id, bot_name, status) VALUES (?,?,?)",
-                    (uid, filename, 'pending'))
+                    (uid, filename, initial_status))
         db.commit()
         bot_id = sql.lastrowid
 
+    # ======= ADMİN YÜKLÜYORSA: OTOMATİK ONAYLA =======
+    if is_admin(uid):
+        warn_text = ""
+        if warnings:
+            warn_text = "\n\n⚠️ *Güvenlik uyarıları var:*\n" + "\n".join(f"• `{w}`" for w in warnings)
+
+        bot.reply_to(
+            message,
+            f"✅ Dosya yüklendi ve *otomatik onaylandı* (Admin).\n"
+            f"📄 `{filename}`{warn_text}\n\n"
+            f"Dosyalarım menüsünden başlatabilirsiniz.",
+            parse_mode="Markdown"
+        )
+        return  # Admin için butonlu bildirim gönderme, işlem tamam
+
+    # ======= NORMAL KULLANICI: ADMIN ONAY BEKLESİN =======
     bot.reply_to(message, "✅ Dosya yüklendi. Admin onayı bekleniyor.")
 
     kb = types.InlineKeyboardMarkup()
@@ -569,7 +588,7 @@ def files(message):
 
 # ================= PROCESS YÖNETİMİ =================
 def _stop_process(bot_id):
-    auto_restart[bot_id] = False  # Watchdog'u durdur
+    auto_restart[bot_id] = False
     proc = running_processes.get(bot_id)
     if proc:
         try:
@@ -584,24 +603,15 @@ def _stop_process(bot_id):
     add_log(bot_id, "Bot durduruldu")
 
 def run_bot_with_log(bot_id, filename, owner_id=None):
-    """
-    Railway Uyumlu Bot Launcher
-    - os.setsid() ile yeni process group -> Railway parent'tan izole
-    - preexec_fn ile sinyal grubunu ayır -> SIGTERM ana bota gelince child ölmez
-    - Watchdog: bot ölünce otomatik yeniden başlatır
-    """
     def target():
         attempt = 0
         while True:
             attempt += 1
             proc = None
             try:
-                # Railway'de child process'i ana process'ten ayır
-                # start_new_session=True -> yeni session/process group açar
-                # böylece Railway ana worker'ı öldürse bile child yaşar
                 kwargs = {}
                 if sys.platform != "win32":
-                    kwargs["start_new_session"] = True  # os.setsid() eşdeğeri
+                    kwargs["start_new_session"] = True
 
                 proc = subprocess.Popen(
                     [sys.executable, "-u", filename],
@@ -627,14 +637,10 @@ def run_bot_with_log(bot_id, filename, owner_id=None):
                     add_log(bot_id, f"Yeniden baslatildi #{attempt} (PID: {proc.pid})")
                     if owner_id:
                         try:
-                            bot.send_message(
-                                owner_id,
-                                f"Bot yeniden baslatildi: {filename} (#{attempt})"
-                            )
+                            bot.send_message(owner_id, f"Bot yeniden baslatildi: {filename} (#{attempt})")
                         except:
                             pass
 
-                # Stdout'u oku (bloklamaz, satir satir)
                 for line in proc.stdout:
                     stripped = line.strip()
                     if stripped:
@@ -653,14 +659,12 @@ def run_bot_with_log(bot_id, filename, owner_id=None):
 
             add_log(bot_id, f"Bot durdu (exit={exit_code})")
 
-            # Elle durdurulduysa cik
             if not auto_restart.get(bot_id, False):
                 with db_lock:
                     sql.execute("UPDATE bots SET running=0 WHERE id=?", (bot_id,))
                     db.commit()
                 break
 
-            # Dosya silindiyse cik
             if not os.path.exists(filename):
                 add_log(bot_id, "Dosya yok, watchdog durdu.")
                 auto_restart.pop(bot_id, None)
@@ -669,7 +673,6 @@ def run_bot_with_log(bot_id, filename, owner_id=None):
                     db.commit()
                 break
 
-            # Hizli crash loopu onle: 10 saniye bekle
             add_log(bot_id, "10 saniye sonra yeniden baslatiliyor...")
             time.sleep(10)
 
@@ -745,7 +748,6 @@ def cb(call):
             return bot.answer_callback_query(call.id, "Dosya bulunamadı.", show_alert=True)
         status, owner_id = res
 
-        # Sadece dosya sahibi veya admin işlem yapabilir
         if caller_id != owner_id and not is_admin(caller_id):
             return bot.answer_callback_query(call.id, "❌ Bu dosya size ait değil.", show_alert=True)
 
@@ -759,15 +761,13 @@ def cb(call):
             filename = get_name(bot_id)
             if not filename or not os.path.exists(filename):
                 return bot.send_message(caller_id, "❌ Dosya bulunamadı.")
-            auto_restart[bot_id] = True  # Otomatik yeniden başlatma AÇ
+            auto_restart[bot_id] = True
             run_bot_with_log(bot_id, filename, owner_id=owner_id)
-            bot.send_message(caller_id,
-                f"▶️ {filename} baslatiliyor...\n\n"
-                f"Bot kapanirsa otomatik yeniden baslatilacak.")
+            bot.send_message(caller_id, f"▶️ {filename} baslatiliyor...\n\nBot kapanirsa otomatik yeniden baslatilacak.")
 
         # --- STOP ---
         elif action == "stop":
-            auto_restart[bot_id] = False  # Otomatik yeniden başlatma KAPAT
+            auto_restart[bot_id] = False
             time.sleep(0.5)
             _stop_process(bot_id)
             bot.send_message(caller_id, "Bot durduruldu.")
@@ -808,7 +808,6 @@ def cb(call):
                 bot.send_message(caller_id, "📄 Log henüz yok.")
             else:
                 chunk = "\n".join(logs[-50:])
-                # Telegram 4096 karakter sınırı
                 for i in range(0, len(chunk), 4000):
                     bot.send_message(caller_id, f"```\n{chunk[i:i+4000]}\n```", parse_mode="Markdown")
 
@@ -828,39 +827,21 @@ def cb(call):
 @bot.message_handler(func=lambda m: m.text == "⭐ Premium Al")
 def premium_buy(message):
     uid = message.from_user.id
-
     with db_lock:
         sql.execute("SELECT premium FROM users WHERE user_id=?", (uid,))
         row = sql.fetchone()
-
     if row and row[0] == 1:
-        return bot.send_message(uid,
-            "✅ Zaten Premium kullanıcısısınız!\n\n"
-            "🎉 Sınırsız bot yükleme & çalıştırma hakkınız aktif.")
-
-    bot.send_message(
-        uid,
-        f"⭐ *Premium Üyelik*\n\n"
-        f"Premium ile şunları kazanırsınız:\n"
-        f"• Sınırsız dosya yükleme (ücretsiz: 3)\n"
-        f"• Öncelikli destek\n"
-        f"• Özel rozet ⭐\n\n"
-        f"💰 Fiyat: *{PREMIUM_STARS} Telegram Yıldızı*\n\n"
-        f"Aşağıdaki butona basarak ödemeyi tamamlayın:",
-        parse_mode="Markdown"
-    )
-
+        return bot.send_message(uid, "✅ Zaten Premium kullanıcısısınız!\n\n🎉 Sınırsız bot yükleme & çalıştırma hakkınız aktif.")
+    bot.send_message(uid,
+        f"⭐ *Premium Üyelik*\n\nPremium ile şunları kazanırsınız:\n"
+        f"• Sınırsız dosya yükleme (ücretsiz: 3)\n• Öncelikli destek\n• Özel rozet ⭐\n\n"
+        f"💰 Fiyat: *{PREMIUM_STARS} Telegram Yıldızı*\n\nAşağıdaki butona basarak ödemeyi tamamlayın:",
+        parse_mode="Markdown")
     prices = [types.LabeledPrice(label="Premium Uyelik", amount=PREMIUM_STARS)]
-    bot.send_invoice(
-        chat_id=uid,
-        title="VDS Bot Premium",
+    bot.send_invoice(chat_id=uid, title="VDS Bot Premium",
         description=f"Sinırsiz bot yukleme & calistirma hakki. Tek seferlik {PREMIUM_STARS} yildiz.",
-        invoice_payload="premium_stars",
-        provider_token="",
-        currency="XTR",
-        prices=prices,
-        start_parameter="premium"
-    )
+        invoice_payload="premium_stars", provider_token="", currency="XTR",
+        prices=prices, start_parameter="premium")
 
 @bot.pre_checkout_query_handler(func=lambda q: True)
 def pre_checkout(query):
@@ -871,41 +852,25 @@ def payment_done(message):
     uid     = message.from_user.id
     payload = message.successful_payment.invoice_payload
     stars   = message.successful_payment.total_amount
-
     if payload == "premium_stars":
         with db_lock:
             sql.execute("UPDATE users SET premium=1 WHERE user_id=?", (uid,))
             db.commit()
-
-        bot.send_message(
-            uid,
-            f"*Odeme Alindi!*\n\n"
-            f"{stars} yildiz odemeniz basariyla alindi.\n"
-            f"Hesabiniz simdi *Premium*!\n\n"
-            f"Artik sinırsiz dosya yukleyebilirsiniz.",
-            parse_mode="Markdown",
-            reply_markup=main_menu()
-        )
-
+        bot.send_message(uid,
+            f"*Odeme Alindi!*\n\n{stars} yildiz odemeniz basariyla alindi.\n"
+            f"Hesabiniz simdi *Premium*!\n\nArtik sinırsiz dosya yukleyebilirsiniz.",
+            parse_mode="Markdown", reply_markup=main_menu())
         notify_admins(
-            f"*Yeni Satin Alma!*\n\n"
-            f"Kullanici: {message.from_user.first_name}\n"
-            f"ID: {uid}\n"
-            f"{stars} Yildiz - Premium verildi.",
-            parse_mode="Markdown"
-        )
-
+            f"*Yeni Satin Alma!*\n\nKullanici: {message.from_user.first_name}\n"
+            f"ID: {uid}\n{stars} Yildiz - Premium verildi.", parse_mode="Markdown")
 
 # ================= TERMINAL =================
-@bot.message_handler(func=lambda m: m.text == "\U0001f4bb Terminal" and is_admin(m.from_user.id))
+@bot.message_handler(func=lambda m: m.text == "💻 Terminal" and is_admin(m.from_user.id))
 def terminal_prompt(message):
     admin_step[message.from_user.id] = "terminal"
-    bot.send_message(
-        message.chat.id,
-        "\U0001f4bb Terminal\n\nCalistirmak istediginiz komutu gonderin.\n"
-        "Ornek: ls -la veya df -h\n\n"
-        "Dikkatli kullanin - bu gercek bir terminal!",
-    )
+    bot.send_message(message.chat.id,
+        "💻 Terminal\n\nCalistirmak istediginiz komutu gonderin.\n"
+        "Ornek: ls -la veya df -h\n\nDikkatli kullanin - bu gercek bir terminal!")
 
 @bot.message_handler(func=lambda m: admin_step.get(m.from_user.id) == "terminal")
 def terminal_run(message):
@@ -916,12 +881,8 @@ def terminal_run(message):
         return bot.send_message(message.chat.id, "Bu komut engellenmistir.")
     bot.send_message(message.chat.id, "Calistiriliyor: " + cmd)
     try:
-        result = subprocess.run(
-            cmd, shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True, timeout=30
-        )
+        result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, timeout=30)
         output = result.stdout.strip() or "(Cikti yok)"
         if len(output) > 4000:
             output = output[-4000:]
@@ -935,10 +896,7 @@ def terminal_run(message):
 @bot.message_handler(func=lambda m: m.text == "📦 Paket Yükle" and is_admin(m.from_user.id))
 def admin_pkg_prompt(message):
     admin_step[message.from_user.id] = "admin_pip"
-    bot.send_message(
-        message.chat.id,
-        "Paket adini gonderin. Birden fazla icin bosluk birakin: requests flask numpy"
-    )
+    bot.send_message(message.chat.id, "Paket adini gonderin. Birden fazla icin bosluk birakin: requests flask numpy")
 
 @bot.message_handler(func=lambda m: admin_step.get(m.from_user.id) == "admin_pip")
 def admin_pkg_install(message):
@@ -949,11 +907,8 @@ def admin_pkg_install(message):
             return bot.send_message(message.chat.id, "Gecersiz paket adi: " + pkg)
     bot.send_message(message.chat.id, "Yukleniyor: " + " ".join(packages))
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install"] + packages,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, timeout=120
-        )
+        result = subprocess.run([sys.executable, "-m", "pip", "install"] + packages,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
         output = result.stdout.strip()
         if len(output) > 4000:
             output = output[-4000:]
@@ -973,10 +928,8 @@ def support(message):
 @bot.message_handler(func=lambda m: m.from_user.id in support_wait)
 def support_msg(message):
     support_wait.pop(message.from_user.id, None)
-    text = (f"📩 *Destek Mesajı*\n\n"
-            f"👤 {message.from_user.first_name}\n"
-            f"🆔 {message.from_user.id}\n\n"
-            f"{message.text}")
+    text = (f"📩 *Destek Mesajı*\n\n👤 {message.from_user.first_name}\n"
+            f"🆔 {message.from_user.id}\n\n{message.text}")
     notify_admins(text, parse_mode="Markdown")
     bot.send_message(message.chat.id, "✅ Mesajınız iletildi.")
 
@@ -985,11 +938,7 @@ def start_polling():
     while True:
         try:
             logging.info("BOT BAŞLATILIYOR...")
-            bot.infinity_polling(
-                timeout=60,
-                long_polling_timeout=60,
-                skip_pending=True
-            )
+            bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
         except Exception as e:
             logging.error(f"POLLING HATASI: {e}")
             logging.info("10 saniye sonra yeniden başlatılıyor...")
