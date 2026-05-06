@@ -25,3 +25,4 @@ python-telegram-bot[job-queue]==20.7
 apscheduler>=3.10.0
 tzlocal>=5.0
 pyTelegramBotAPI==4.23.0
+psycopg2-binary
