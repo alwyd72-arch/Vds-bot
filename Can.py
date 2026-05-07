@@ -13,7 +13,7 @@ from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-TOKEN = "8113976572:AAHsDdfSVtyBaU_txJ9T6cbFXdQKIvOEiLQ"
+TOKEN = "8113976572:AAE2CZPJHRxz0tDMoAb9uEtzNh3o_qexsEk"
 ADMIN_IDS = [8434939976]
 PREMIUM_STARS = 25  # Kaç yıldız = premium
 
